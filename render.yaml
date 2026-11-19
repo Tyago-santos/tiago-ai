@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: tiago-ai-api
+    runtime: node
+    rootDir: backend
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: ALLOWED_ORIGINS
+        value: https://tyago-santos.github.io
+      - key: RATE_LIMIT_MAX
+        value: "12"
+      - key: RATE_LIMIT_WINDOW_MS
+        value: "60000"
+      - key: GEMINI_API_KEY
+        sync: false

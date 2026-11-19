@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+@theme {
+  --color-canvas: #0d1117;
+  --color-surface: #161b22;
+  --color-subtle: #21262d;
+  --color-line: #30363d;
+  --color-muted: #8b949e;
+  --color-heading: #e6edf3;
+  --color-accent-blue: #58a6ff;
+  --color-accent-green: #3fb950;
+  --color-neon: #00ff00;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-canvas);
+  color: var(--color-heading);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Ubuntu, Helvetica, Arial, sans-serif;
+}
