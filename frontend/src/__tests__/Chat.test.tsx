@@ -95,6 +95,50 @@ describe('Tiago AI — chat', () => {
     expect((screen.getByRole('button', { name: /enviar/i }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('formata a resposta em Markdown (negrito, lista e link clicável)', async () => {
+    const user = userEvent.setup();
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/suggestions')) {
+        return jsonResponse({ suggestions: ['sugestão'] });
+      }
+      return jsonResponse({
+        reply:
+          'Tiago tem vários projetos que usam Node.js:\n\n' +
+          '*   **Gnosis IA (ia_study)**: plataforma de estudos com IA. Repositório: https://github.com/Tyago-santos/ia_study\n' +
+          '*   **Connect Dev**: rede social de estudos.',
+      });
+    });
+
+    await openChat(user);
+    await user.type(screen.getByPlaceholderText(/sua pergunta/i), 'Quais projetos usam Node.js?');
+    await user.click(screen.getByRole('button', { name: /enviar/i }));
+
+    // negrito renderizado como <strong>, não como texto "**"
+    expect(await screen.findByText('Gnosis IA (ia_study)', { selector: 'strong' })).toBeTruthy();
+    // lista renderizada como <ul>/<li>
+    expect(screen.getAllByRole('listitem').length).toBeGreaterThanOrEqual(2);
+    // link clicável e aberto em nova aba
+    const link = screen.getByRole('link', { name: /github\.com\/Tyago-santos\/ia_study/i });
+    expect(link.getAttribute('href')).toContain('https://github.com/Tyago-santos/ia_study');
+    expect(link.getAttribute('target')).toBe('_blank');
+    // a sintaxe crua do Markdown não aparece para o visitante
+    expect(document.body.textContent).not.toContain('**');
+    expect(document.body.textContent).not.toContain('*   ');
+  });
+
+  it('mantém o scroll apenas na área de mensagens, sem rolar a página inteira', async () => {
+    const user = userEvent.setup();
+    await openChat(user);
+
+    const main = screen.getByRole('main');
+    expect(main.className).toContain('overflow-y-auto');
+
+    const root = main.parentElement as HTMLElement;
+    expect(root.className).toContain('overflow-hidden');
+    expect(root.className).toContain('h-dvh');
+  });
+
   it('sugere perguntas e preenche a entrada ao clicar', async () => {
     const user = userEvent.setup();
     await openChat(user);

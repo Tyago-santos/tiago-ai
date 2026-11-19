@@ -17,7 +17,7 @@ export default function Chat() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -32,8 +32,12 @@ export default function Chat() {
   }, []);
 
   useEffect(() => {
-    if (typeof bottomRef.current?.scrollIntoView === 'function') {
-      bottomRef.current.scrollIntoView({ behavior: 'smooth' });
+    const el = scrollRef.current;
+    if (!el) return;
+    if (typeof el.scrollTo === 'function') {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    } else {
+      el.scrollTop = el.scrollHeight;
     }
   }, [messages, loading]);
 
@@ -62,8 +66,8 @@ export default function Chat() {
   }
 
   return (
-    <div className="flex min-h-full flex-col">
-      <header className="border-b border-line bg-surface/60 px-4 py-3">
+    <div className="flex h-dvh flex-col overflow-hidden">
+      <header className="shrink-0 border-b border-line bg-surface/60 px-4 py-3">
         <div className="mx-auto flex w-full max-w-2xl items-center gap-3">
           <img
             src="https://avatars.githubusercontent.com/u/222115985?v=4"
@@ -95,7 +99,7 @@ export default function Chat() {
         </div>
       </header>
 
-      <main className="flex-1 px-4 py-6">
+      <main ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-6">
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-4">
           {messages.length === 0 && (
             <div className="rounded-xl border border-line bg-surface p-4 text-sm leading-relaxed text-muted">
@@ -124,12 +128,10 @@ export default function Chat() {
           {messages.length === 0 && !loading && (
             <SuggestionChips suggestions={suggestions} onSelect={setInput} />
           )}
-
-          <div ref={bottomRef} />
         </div>
       </main>
 
-      <footer className="border-t border-line px-4 py-4">
+      <footer className="shrink-0 border-t border-line px-4 py-4">
         <div className="mx-auto w-full max-w-2xl">
           <ChatInput value={input} onChange={setInput} onSend={handleSend} disabled={loading} />
           <p className="mt-2 text-center text-[11px] text-muted">
