@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { loadKnowledgeBase } from './knowledge';
+import { listRepositories, getReadme, type RepoSummary } from './github';
 
 export interface ChatTurn {
   role: 'user' | 'model';
@@ -23,6 +24,63 @@ Regras:
 
 let rotation = 0;
 const clients = new Map<string, GoogleGenAI>();
+
+const MAX_MENTIONS = 2;
+const README_LIMIT = 4000;
+
+/** Detecta repositórios citados na mensagem (aceita "report_city" ou "Report City"). */
+function detectMentionedRepos(message: string, repos: RepoSummary[]): string[] {
+  const lower = message.toLowerCase();
+  const hits: string[] = [];
+  for (const repo of repos) {
+    const name = repo.name.toLowerCase();
+    const slug = name.replace(/[-_.]+/g, ' ').trim();
+    if (lower.includes(name) || (slug.length > 3 && lower.includes(slug))) {
+      hits.push(repo.name);
+      if (hits.length >= MAX_MENTIONS) break;
+    }
+  }
+  return hits;
+}
+
+/**
+ * Monta a instrução do sistema: regras + base curada + índice dos repositórios
+ * do GitHub + READMEs dos projetos citados na pergunta (contexto sob demanda).
+ */
+async function buildSystemInstruction(message: string, knowledge: string): Promise<string> {
+  let instruction = `${SYSTEM_PROMPT}\n\n# BASE DE CONHECIMENTO\n${knowledge}`;
+
+  let repos: RepoSummary[] = [];
+  try {
+    repos = await listRepositories();
+  } catch {
+    // GitHub indisponível: segue apenas com a base curada
+    repos = [];
+  }
+
+  if (repos.length > 0) {
+    const index = repos
+      .map(
+        (repo) =>
+          `- ${repo.name}: ${repo.description}${repo.language ? ` (${repo.language})` : ''} — ${repo.url}`,
+      )
+      .join('\n');
+    instruction += `\n\n# REPOSITÓRIOS DO GITHUB (perfil público)\n${index}`;
+
+    for (const name of detectMentionedRepos(message, repos)) {
+      try {
+        const readme = await getReadme(name);
+        if (readme) {
+          instruction += `\n\n# README DE ${name} (extraído do GitHub)\n${readme.slice(0, README_LIMIT)}`;
+        }
+      } catch {
+        // sem o README a resposta segue com a base curada
+      }
+    }
+  }
+
+  return instruction;
+}
 
 /** Chave principal + fallbacks (separadas por vírgula ou espaço), sem duplicadas. */
 export function resolveApiKeys(): string[] {
@@ -58,6 +116,7 @@ function isQuotaError(error: unknown): boolean {
 export async function generateReply({ message, history }: GenerateReplyInput): Promise<string> {
   const knowledge = await loadKnowledgeBase();
   const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const systemInstruction = await buildSystemInstruction(message, knowledge);
 
   const keys = resolveApiKeys();
   if (keys.length === 0) {
@@ -82,7 +141,7 @@ export async function generateReply({ message, history }: GenerateReplyInput): P
         model,
         contents,
         config: {
-          systemInstruction: `${SYSTEM_PROMPT}\n\n# BASE DE CONHECIMENTO\n${knowledge}`,
+          systemInstruction,
           temperature: 0.5,
           maxOutputTokens: 900,
         },

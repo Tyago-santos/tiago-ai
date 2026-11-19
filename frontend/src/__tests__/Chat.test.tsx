@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from '../App';
 
@@ -82,6 +82,22 @@ describe('Tiago AI — chat', () => {
     await user.click(screen.getByRole('button', { name: /enviar/i }));
 
     expect(await screen.findByText(/não foi possível responder/i)).toBeTruthy();
+  });
+
+  it('envia com Enter e apenas quebra linha com Shift+Enter', async () => {
+    const user = userEvent.setup();
+    await openChat(user);
+
+    const input = screen.getByPlaceholderText(/sua pergunta/i) as HTMLTextAreaElement;
+
+    await user.type(input, 'oi{enter}');
+    expect(await screen.findByText('oi')).toBeTruthy();
+    expect(input.value).toBe('');
+
+    await user.type(input, 'linha um{shift>}{enter}{/shift}linha dois');
+    expect(input.value).toContain('\n');
+    // a mensagem não foi para a conversa (fica só na caixa de entrada)
+    expect(within(screen.getByRole('main')).queryByText(/linha um/)).toBeNull();
   });
 
   it('mantém o botão de envio desabilitado com a entrada vazia', async () => {

@@ -1,8 +1,13 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { ZodError, z } from 'zod';
 import { createRateLimiter } from './services/rateLimit';
 import { generateReply } from './services/gemini';
+import { listRepositories } from './services/github';
+import { parseProjectsIndex, filterProjects } from './services/projects';
+import { knowledgeDir } from './services/knowledge';
 
 const chatBodySchema = z.object({
   message: z.string().trim().min(1, 'Mensagem não pode ficar vazia').max(2000, 'Mensagem muito longa'),
@@ -73,6 +78,38 @@ export function createApp(options: AppOptions = {}) {
 
   app.get('/api/suggestions', (_req, res) => {
     res.status(200).json({ suggestions: SUGGESTIONS });
+  });
+
+  // Índice de projetos: GitHub ao vivo, com fallback para o projects.md local
+  app.get('/api/projects', async (req, res) => {
+    const tech = String(req.query.tech ?? '').trim().toLowerCase();
+
+    try {
+      const repos = await listRepositories();
+      const projects = tech
+        ? repos.filter((repo) =>
+            `${repo.name} ${repo.description} ${repo.language} ${repo.topics.join(' ')}`
+              .toLowerCase()
+              .includes(tech),
+          )
+        : repos;
+      res.status(200).json({ source: 'github', projects });
+      return;
+    } catch (error) {
+      console.error(
+        '[tiago-ai] índice do GitHub indisponível, usando o local:',
+        error instanceof Error ? error.message : error,
+      );
+    }
+
+    try {
+      const markdown = await fs.readFile(path.join(knowledgeDir(), 'projects.md'), 'utf8');
+      const local = parseProjectsIndex(markdown);
+      const projects = tech ? filterProjects(local, tech) : local;
+      res.status(200).json({ source: 'local', projects });
+    } catch {
+      res.status(503).json({ error: 'Não foi possível carregar os projetos agora.' });
+    }
   });
 
   app.post('/api/chat', async (req, res, next) => {

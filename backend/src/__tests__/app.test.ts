@@ -5,14 +5,49 @@ vi.mock('../services/gemini', () => ({
   generateReply: vi.fn(async () => 'Resposta de teste do Tiago AI.'),
 }));
 
+const githubMock = vi.hoisted(() => ({
+  listRepositories: vi.fn(),
+  getReadme: vi.fn(),
+}));
+
+vi.mock('../services/github', () => ({
+  listRepositories: githubMock.listRepositories,
+  getReadme: githubMock.getReadme,
+}));
+
 import { createApp } from '../app';
 import { generateReply } from '../services/gemini';
 
 const app = createApp();
 
+const GITHUB_REPOS = [
+  {
+    name: 'ia_study',
+    description: 'Plataforma de estudos com IA',
+    url: 'https://github.com/Tyago-santos/ia_study',
+    language: 'TypeScript',
+    topics: ['ai'],
+    stars: 5,
+    updatedAt: '2026-11-01T00:00:00Z',
+  },
+  {
+    name: 'polearn',
+    description: 'App para aprender idiomas',
+    url: 'https://github.com/Tyago-santos/polearn',
+    language: 'JavaScript',
+    topics: [],
+    stars: 2,
+    updatedAt: '2026-10-01T00:00:00Z',
+  },
+];
+
 beforeEach(() => {
   vi.mocked(generateReply).mockClear();
   vi.mocked(generateReply).mockResolvedValue('Resposta de teste do Tiago AI.');
+  githubMock.listRepositories.mockReset();
+  githubMock.listRepositories.mockResolvedValue(GITHUB_REPOS);
+  githubMock.getReadme.mockReset();
+  githubMock.getReadme.mockResolvedValue('# README');
 });
 
 describe('GET /api/health', () => {
@@ -111,6 +146,42 @@ describe('POST /api/chat', () => {
       .set('Content-Type', 'application/json')
       .send('{"message":');
     expect(res.status).toBe(400);
+  });
+});
+
+describe('GET /api/projects', () => {
+  it('devolve o índice de repositórios vindo do GitHub', async () => {
+    const res = await request(app).get('/api/projects');
+    expect(res.status).toBe(200);
+    expect(res.body.projects).toHaveLength(2);
+    expect(res.body.projects[0]).toMatchObject({ name: 'ia_study', language: 'TypeScript' });
+    expect(res.body.source).toBe('github');
+    expect(githubMock.listRepositories).toHaveBeenCalledTimes(1);
+  });
+
+  it('filtra por tecnologia com ?tech=', async () => {
+    const res = await request(app).get('/api/projects?tech=typescript');
+    expect(res.status).toBe(200);
+    expect(res.body.projects).toHaveLength(1);
+    expect(res.body.projects[0].name).toBe('ia_study');
+  });
+
+  it('usa o índice local como fallback quando a API do GitHub falha', async () => {
+    githubMock.listRepositories.mockRejectedValueOnce(new Error('GitHub 403 rate limit'));
+
+    const res = await request(app).get('/api/projects');
+
+    expect(res.status).toBe(200);
+    expect(res.body.source).toBe('local');
+    expect(res.body.projects.length).toBeGreaterThanOrEqual(10);
+    expect(JSON.stringify(res.body.projects)).toContain('Gnosis IA');
+  });
+
+  it('não vaza detalhes internos quando tudo falha', async () => {
+    githubMock.listRepositories.mockRejectedValueOnce(new Error('segredo interno'));
+    const res = await request(app).get('/api/projects');
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(res.body)).not.toContain('segredo interno');
   });
 });
 

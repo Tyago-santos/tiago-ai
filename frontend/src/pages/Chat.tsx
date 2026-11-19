@@ -135,6 +135,11 @@ export default function Chat() {
         <div className="mx-auto w-full max-w-2xl">
           <ChatInput value={input} onChange={setInput} onSend={handleSend} disabled={loading} />
           <p className="mt-2 text-center text-[11px] text-muted">
+            <kbd className="rounded border border-line bg-subtle px-1 py-0.5 text-[10px]">Enter</kbd> envia ·{' '}
+            <kbd className="rounded border border-line bg-subtle px-1 py-0.5 text-[10px]">Shift</kbd>+
+            <kbd className="rounded border border-line bg-subtle px-1 py-0.5 text-[10px]">Enter</kbd> quebra linha
+          </p>
+          <p className="mt-1 text-center text-[11px] text-muted">
             As respostas usam a base pública do perfil de Tiago Santos.
           </p>
         </div>
