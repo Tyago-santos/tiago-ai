@@ -109,4 +109,10 @@ describe('cliente da API do GitHub', () => {
     await expect(getReadme('sem-readme')).resolves.toBe('');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('REJEITA nomes de repositório inválidos sem chamar a API (trava de segurança)', async () => {
+    await expect(getReadme('../outro-dono/repo-privado')).resolves.toBe('');
+    await expect(getReadme('owner/repo')).resolves.toBe('');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

@@ -81,6 +81,11 @@ export async function listRepositories(): Promise<RepoSummary[]> {
 
 /** Baixa o README bruto (Markdown) de um repositório. Retorna '' se não existir. */
 export async function getReadme(repo: string): Promise<string> {
+  // trava de segurança: só nomes simples de repositório (nada de caminhos/owners)
+  if (!/^[A-Za-z0-9._-]+$/.test(repo)) {
+    return '';
+  }
+
   const key = repo.toLowerCase();
   const cached = readmeCache.get(key);
   if (cached && Date.now() - cached.loadedAt < README_TTL_MS) {
