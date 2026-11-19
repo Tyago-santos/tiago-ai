@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ZodError, z } from 'zod';
 import { createRateLimiter } from './services/rateLimit';
-import { generateReply } from './services/gemini';
+import { generateReply, streamReply } from './services/gemini';
 import { listRepositories } from './services/github';
 import { parseProjectsIndex, filterProjects } from './services/projects';
 import { knowledgeDir } from './services/knowledge';
@@ -125,6 +125,57 @@ export function createApp(options: AppOptions = {}) {
       const body = chatBodySchema.parse(req.body);
       const reply = await generateReply({ message: body.message, history: body.history });
       res.status(200).json({ reply });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Resposta em streaming (SSE): o visitante vê o texto aparecer na hora
+  app.post('/api/chat/stream', async (req, res, next) => {
+    try {
+      const key = req.ip || 'desconhecido';
+      const limit = rateLimit(key);
+      if (!limit.allowed) {
+        res.setHeader('Retry-After', String(limit.retryAfterSeconds));
+        res.status(429).json({ error: 'Muitas requisições. Aguarde um pouco e tente novamente.' });
+        return;
+      }
+
+      const body = chatBodySchema.parse(req.body);
+      let started = false;
+
+      const commitHeaders = () => {
+        res.status(200);
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no');
+        res.flushHeaders();
+        started = true;
+      };
+
+      try {
+        for await (const delta of streamReply({ message: body.message, history: body.history })) {
+          if (!started) commitHeaders();
+          res.write(`data: ${JSON.stringify({ delta })}\n\n`);
+        }
+        if (!started) commitHeaders();
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+        res.end();
+      } catch (streamError) {
+        if (!started) {
+          throw streamError; // vira 503 JSON amigável no handler de erros
+        }
+        // meio do stream: avisa o cliente e encerra sem quebrar a conexão
+        console.error(
+          '[tiago-ai] erro no stream:',
+          streamError instanceof Error ? streamError.message : streamError,
+        );
+        res.write(
+          `data: ${JSON.stringify({ error: 'Não foi possível responder agora. Tente novamente em instantes.' })}\n\n`,
+        );
+        res.end();
+      }
     } catch (error) {
       next(error);
     }

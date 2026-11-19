@@ -9,6 +9,36 @@ function jsonResponse(data: unknown, ok = true, status = 200) {
   return { ok, status, json: async () => data } as Response;
 }
 
+function sseResponse(events: unknown[]): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const event of events) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+      }
+      controller.close();
+    },
+  });
+  return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+}
+
+function sseFromStream(stream: ReadableStream<Uint8Array>): Response {
+  return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+}
+
+function createOpenStream(): {
+  stream: ReadableStream<Uint8Array>;
+  controller: () => ReadableStreamDefaultController<Uint8Array> | undefined;
+} {
+  let ctrl: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      ctrl = controller;
+    },
+  });
+  return { stream, controller: () => ctrl };
+}
+
 async function openChat(user: ReturnType<typeof userEvent.setup>) {
   render(<App />);
   await user.click(screen.getByRole('link', { name: /conversar agora/i }));
@@ -23,7 +53,7 @@ beforeEach(() => {
     if (url.includes('/api/suggestions')) {
       return jsonResponse({ suggestions: ['Quem é Tiago Santos?', 'Quais projetos ele fez?'] });
     }
-    return jsonResponse({ reply: 'Resposta padrão de teste.' });
+    return sseResponse([{ delta: 'Resposta padrão de teste.' }, { done: true }]);
   });
 });
 
@@ -46,15 +76,13 @@ describe('Tiago AI — chat', () => {
 
   it('mostra estado de carregamento enquanto espera a IA', async () => {
     const user = userEvent.setup();
-    let resolveChat: ((value: Response) => void) | undefined;
+    const open = createOpenStream();
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/api/suggestions')) {
         return Promise.resolve(jsonResponse({ suggestions: ['sugestão'] }));
       }
-      return new Promise<Response>((resolve) => {
-        resolveChat = resolve;
-      });
+      return Promise.resolve(sseFromStream(open.stream));
     });
 
     await openChat(user);
@@ -63,8 +91,37 @@ describe('Tiago AI — chat', () => {
 
     expect(screen.getByText(/digitando/i)).toBeTruthy();
 
-    resolveChat?.(jsonResponse({ reply: 'Olá! Eu sou o Tiago AI.' }));
+    open.controller()?.enqueue(new TextEncoder().encode('data: {"delta":"Olá! Eu sou o Tiago AI."}\n\n'));
+    open.controller()?.close();
     expect(await screen.findByText(/Olá! Eu sou o Tiago AI\./)).toBeTruthy();
+  });
+
+  it('mostra a resposta progressivamente, antes do stream terminar', async () => {
+    const user = userEvent.setup();
+    const open = createOpenStream();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/suggestions')) {
+        return Promise.resolve(jsonResponse({ suggestions: ['sugestão'] }));
+      }
+      return Promise.resolve(sseFromStream(open.stream));
+    });
+
+    await openChat(user);
+    await user.type(screen.getByPlaceholderText(/sua pergunta/i), 'oi');
+    await user.click(screen.getByRole('button', { name: /enviar/i }));
+
+    const encoder = new TextEncoder();
+    open.controller()?.enqueue(encoder.encode('data: {"delta":"Resposta parcial"}\n\n'));
+
+    // o texto parcial aparece com o stream ainda aberto
+    expect(await screen.findByText(/Resposta parcial/)).toBeTruthy();
+    expect(screen.queryByText(/e final/)).toBeNull();
+
+    open.controller()?.enqueue(encoder.encode('data: {"delta":" e final"}\n\n'));
+    open.controller()?.close();
+
+    expect(await screen.findByText(/Resposta parcial e final/)).toBeTruthy();
   });
 
   it('exibe mensagem de erro quando a API falha', async () => {
@@ -118,12 +175,15 @@ describe('Tiago AI — chat', () => {
       if (url.includes('/api/suggestions')) {
         return jsonResponse({ suggestions: ['sugestão'] });
       }
-      return jsonResponse({
-        reply:
-          'Tiago tem vários projetos que usam Node.js:\n\n' +
-          '*   **Gnosis IA (ia_study)**: plataforma de estudos com IA. Repositório: https://github.com/Tyago-santos/ia_study\n' +
-          '*   **Connect Dev**: rede social de estudos.',
-      });
+      return sseResponse([
+        {
+          delta:
+            'Tiago tem vários projetos que usam Node.js:\n\n' +
+            '*   **Gnosis IA (ia_study)**: plataforma de estudos com IA. Repositório: https://github.com/Tyago-santos/ia_study\n' +
+            '*   **Connect Dev**: rede social de estudos.',
+        },
+        { done: true },
+      ]);
     });
 
     await openChat(user);

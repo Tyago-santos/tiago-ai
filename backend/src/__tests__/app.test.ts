@@ -3,6 +3,10 @@ import request from 'supertest';
 
 vi.mock('../services/gemini', () => ({
   generateReply: vi.fn(async () => 'Resposta de teste do Tiago AI.'),
+  streamReply: vi.fn(async function* () {
+    yield 'Resposta ';
+    yield 'de teste.';
+  }),
 }));
 
 const githubMock = vi.hoisted(() => ({
@@ -16,7 +20,7 @@ vi.mock('../services/github', () => ({
 }));
 
 import { createApp } from '../app';
-import { generateReply } from '../services/gemini';
+import { generateReply, streamReply } from '../services/gemini';
 
 const app = createApp();
 
@@ -44,6 +48,11 @@ const GITHUB_REPOS = [
 beforeEach(() => {
   vi.mocked(generateReply).mockClear();
   vi.mocked(generateReply).mockResolvedValue('Resposta de teste do Tiago AI.');
+  vi.mocked(streamReply).mockReset();
+  vi.mocked(streamReply).mockImplementation(async function* () {
+    yield 'Resposta ';
+    yield 'de teste.';
+  });
   githubMock.listRepositories.mockReset();
   githubMock.listRepositories.mockResolvedValue(GITHUB_REPOS);
   githubMock.getReadme.mockReset();
@@ -181,6 +190,48 @@ describe('GET /api/projects', () => {
     githubMock.listRepositories.mockRejectedValueOnce(new Error('segredo interno'));
     const res = await request(app).get('/api/projects');
     expect(res.status).toBe(200);
+    expect(JSON.stringify(res.body)).not.toContain('segredo interno');
+  });
+});
+
+describe('POST /api/chat/stream (SSE)', () => {
+  it('transmite a resposta em pedaços com event-stream', async () => {
+    const res = await request(app).post('/api/chat/stream').send({ message: 'oi' });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('text/event-stream');
+    expect(res.headers['cache-control']).toContain('no-cache');
+    expect(res.text).toContain('data: {"delta":"Resposta "}');
+    expect(res.text).toContain('data: {"delta":"de teste."}');
+    expect(res.text).toContain('data: {"done":true}');
+    expect(streamReply).toHaveBeenCalledTimes(1);
+  });
+
+  it('valida a mensagem antes de abrir o stream', async () => {
+    const res = await request(app).post('/api/chat/stream').send({ message: '' });
+    expect(res.status).toBe(400);
+    expect(res.headers['content-type']).not.toContain('text/event-stream');
+    expect(streamReply).not.toHaveBeenCalled();
+  });
+
+  it('aplica rate limit no stream também', async () => {
+    const limitedApp = createApp({ rateLimit: { limit: 1, windowMs: 60_000 } });
+    await request(limitedApp).post('/api/chat/stream').send({ message: 'uma' });
+    const second = await request(limitedApp).post('/api/chat/stream').send({ message: 'duas' });
+    expect(second.status).toBe(429);
+    expect(second.body.error).toBeTruthy();
+  });
+
+  it('converte falha inicial da IA em erro JSON amigável (não stream quebrado)', async () => {
+    vi.mocked(streamReply).mockImplementationOnce(async function* () {
+      throw new Error('segredo interno do servidor');
+      yield;
+    });
+
+    const res = await request(app).post('/api/chat/stream').send({ message: 'oi' });
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBeTruthy();
     expect(JSON.stringify(res.body)).not.toContain('segredo interno');
   });
 });

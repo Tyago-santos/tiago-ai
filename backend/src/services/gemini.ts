@@ -165,3 +165,68 @@ export async function generateReply({ message, history }: GenerateReplyInput): P
 
   throw quotaError;
 }
+
+/**
+ * Mesma coisa que generateReply, mas devolvendo a resposta em pedaços
+ * (async generator) para o frontend exibir em tempo real.
+ */
+export async function* streamReply({ message, history }: GenerateReplyInput): AsyncGenerator<string> {
+  const knowledge = await loadKnowledgeBase();
+  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const systemInstruction = await buildSystemInstruction(message, knowledge);
+
+  const contents = [
+    ...history.map((turn) => ({
+      role: turn.role,
+      parts: [{ text: turn.content }],
+    })),
+    { role: 'user' as const, parts: [{ text: message }] },
+  ];
+
+  const keys = resolveApiKeys();
+  if (keys.length === 0) {
+    throw new Error('GEMINI_API_KEY não configurada');
+  }
+
+  const start = rotation % keys.length;
+  let quotaError: unknown = null;
+  let emitted = false;
+
+  for (let offset = 0; offset < keys.length; offset += 1) {
+    const index = (start + offset) % keys.length;
+    try {
+      const stream = await getClient(keys[index]).models.generateContentStream({
+        model,
+        contents,
+        config: {
+          systemInstruction,
+          temperature: 0.5,
+          maxOutputTokens: 900,
+        },
+      });
+
+      for await (const chunk of stream as AsyncIterable<{ text?: string }>) {
+        const text = chunk.text ?? '';
+        if (text) {
+          emitted = true;
+          yield text;
+        }
+      }
+
+      if (!emitted) {
+        throw new Error('O modelo retornou uma resposta vazia');
+      }
+      rotation = (index + 1) % keys.length;
+      return;
+    } catch (error) {
+      // Troca de chave só antes do primeiro pedaço; depois disso a
+      // resposta já começou a chegar ao visitante e não pode recomeçar.
+      if (emitted || !isQuotaError(error)) {
+        throw error;
+      }
+      quotaError = error;
+    }
+  }
+
+  throw quotaError;
+}

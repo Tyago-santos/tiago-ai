@@ -5,15 +5,23 @@ const harness = vi.hoisted(() => ({
 }));
 
 const generateContentMock = vi.fn();
+const generateContentStreamMock = vi.fn();
 
 vi.mock('@google/genai', () => ({
   GoogleGenAI: class {
-    models: { generateContent: (args: unknown) => Promise<unknown> };
+    models: {
+      generateContent: (args: unknown) => Promise<unknown>;
+      generateContentStream: (args: unknown) => Promise<unknown>;
+    };
     constructor(options: { apiKey?: string }) {
       this.models = {
         generateContent: (args: unknown) => {
           harness.usedKeys.push(String(options.apiKey));
           return generateContentMock(args);
+        },
+        generateContentStream: (args: unknown) => {
+          harness.usedKeys.push(String(options.apiKey));
+          return generateContentStreamMock(args);
         },
       };
     }
@@ -24,9 +32,17 @@ vi.mock('../services/knowledge', () => ({
   loadKnowledgeBase: vi.fn(async () => '# BASE DE CONHECIMENTO'),
 }));
 
-import { generateReply, resolveApiKeys, resetKeyRotation } from '../services/gemini';
+import { generateReply, streamReply, resolveApiKeys, resetKeyRotation } from '../services/gemini';
 
 const savedEnv = { ...process.env };
+
+function makeStream(texts: string[]) {
+  return {
+    async *[Symbol.asyncIterator]() {
+      for (const text of texts) yield { text };
+    },
+  };
+}
 
 function setKeys(primary: string, fallbacks = '') {
   process.env.GEMINI_API_KEY = primary;
@@ -36,6 +52,7 @@ function setKeys(primary: string, fallbacks = '') {
 beforeEach(() => {
   harness.usedKeys.length = 0;
   generateContentMock.mockReset();
+  generateContentStreamMock.mockReset();
   resetKeyRotation();
   process.env.GEMINI_MODEL = 'gemini-test';
 });
@@ -113,5 +130,67 @@ describe('chaves da API — rotação', () => {
     await generateReply({ message: 'oi', history: [] });
 
     expect(harness.usedKeys).toEqual(['chave-1', 'chave-2', 'chave-1']);
+  });
+});
+
+describe('streamReply — resposta em streaming', () => {
+  it('reparte a resposta em pedaços', async () => {
+    setKeys('chave-1', 'chave-2');
+    generateContentStreamMock.mockResolvedValue(makeStream(['Olá', ' mundo']));
+
+    const pieces: string[] = [];
+    for await (const piece of streamReply({ message: 'oi', history: [] })) {
+      pieces.push(piece);
+    }
+
+    expect(pieces).toEqual(['Olá', ' mundo']);
+  });
+
+  it('troca de chave no 429 antes de emitir qualquer pedaço', async () => {
+    setKeys('chave-1', 'chave-2');
+    generateContentStreamMock
+      .mockRejectedValueOnce(new Error('429 quota exceeded'))
+      .mockResolvedValueOnce(makeStream(['ok']));
+
+    const pieces: string[] = [];
+    for await (const piece of streamReply({ message: 'oi', history: [] })) {
+      pieces.push(piece);
+    }
+
+    expect(pieces).toEqual(['ok']);
+    expect(harness.usedKeys).toEqual(['chave-1', 'chave-2']);
+  });
+
+  it('propaga o erro de cota quando todas as chaves falham', async () => {
+    setKeys('chave-1', 'chave-2');
+    generateContentStreamMock.mockRejectedValue(new Error('429 quota'));
+
+    await expect(
+      (async () => {
+        for await (const _piece of streamReply({ message: 'oi', history: [] })) {
+          // consome o stream
+        }
+      })(),
+    ).rejects.toThrow('429 quota');
+    expect(harness.usedKeys).toEqual(['chave-1', 'chave-2']);
+  });
+
+  it('NÃO troca de chave depois que já começou a emitir', async () => {
+    setKeys('chave-1', 'chave-2');
+    generateContentStreamMock.mockImplementationOnce(() => ({
+      async *[Symbol.asyncIterator]() {
+        yield { text: 'parcial' };
+        throw new Error('429 quota no meio do stream');
+      },
+    }));
+
+    await expect(
+      (async () => {
+        for await (const _piece of streamReply({ message: 'oi', history: [] })) {
+          // consome até falhar
+        }
+      })(),
+    ).rejects.toThrow('429 quota no meio');
+    expect(generateContentStreamMock).toHaveBeenCalledTimes(1);
   });
 });

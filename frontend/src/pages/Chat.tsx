@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { ChatInput } from '../components/ChatInput';
 import { ChatMessage, type Message } from '../components/ChatMessage';
 import { SuggestionChips } from '../components/SuggestionChips';
-import { fetchSuggestions, sendChat, type ChatTurn } from '../services/api';
+import { fetchSuggestions, sendChatStream, type ChatTurn } from '../services/api';
 
 let idCounter = 0;
 function nextId(): string {
@@ -50,20 +50,33 @@ export default function Chat() {
       content: item.content,
     }));
 
-    setMessages((prev) => [...prev, { id: nextId(), role: 'user', content: message }]);
+    const assistantId = nextId();
+    setMessages((prev) => [
+      ...prev,
+      { id: nextId(), role: 'user', content: message },
+      { id: assistantId, role: 'assistant', content: '' },
+    ]);
     setInput('');
     setError(null);
     setLoading(true);
 
     try {
-      const reply = await sendChat(message, history);
-      setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', content: reply }]);
+      await sendChatStream(message, history, (fullText) => {
+        setMessages((prev) =>
+          prev.map((item) => (item.id === assistantId ? { ...item, content: fullText } : item)),
+        );
+      });
     } catch (err) {
+      // remove o balão vazio se nada chegou; mantém o texto parcial se chegou algo
+      setMessages((prev) => prev.filter((item) => !(item.id === assistantId && item.content === '')));
       setError(err instanceof Error ? err.message : 'Não foi possível responder agora. Tente novamente em instantes.');
     } finally {
       setLoading(false);
     }
   }
+
+  const lastMessage = messages[messages.length - 1];
+  const waiting = loading && (!lastMessage || (lastMessage.role === 'assistant' && lastMessage.content === ''));
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden">
@@ -108,11 +121,13 @@ export default function Chat() {
             </div>
           )}
 
-          {messages.map((message) => (
-            <ChatMessage key={message.id} message={message} />
-          ))}
+          {messages
+            .filter((message) => message.role === 'user' || message.content.length > 0)
+            .map((message) => (
+              <ChatMessage key={message.id} message={message} />
+            ))}
 
-          {loading && (
+          {waiting && (
             <div role="status" className="text-sm text-muted">
               Tiago AI está digitando
               <span className="animate-pulse">…</span>
