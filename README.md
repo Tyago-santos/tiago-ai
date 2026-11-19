@@ -56,7 +56,8 @@ VITE_API_URL=http://localhost:3001 npm run dev   # http://localhost:5173/tiago-a
 | Variável | Descrição | Padrão |
 |---|---|---|
 | `GEMINI_API_KEY` | chave da API Gemini (obrigatória em produção) | — |
-| `GEMINI_MODEL` | modelo usado | `gemini-2.5-flash` |
+| `GEMINI_API_KEY_FALLBACKS` | chaves extras separadas por vírgula; o backend rotaciona quando uma atinge a cota diária | — |
+| `GEMINI_MODEL` | modelo usado | `gemini-3.5-flash-lite` |
 | `PORT` | porta do servidor | `3001` |
 | `ALLOWED_ORIGINS` | origens liberadas no CORS | `https://tyago-santos.github.io` |
 | `RATE_LIMIT_MAX` | requisições por janela | `12` |
